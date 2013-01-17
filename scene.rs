@@ -21,7 +21,7 @@ pub fn render_singlethread<T: Scene>(camera: &Camera, scene: &T, w: uint, h: uin
     let fy = fy + rand::task_rng().gen_float() / h;
 
     let ray = camera.ray(fx, fy);
-    let color = trace_ray(scene, &ray);
+    let color = trace_ray(scene, &ray, 0);
     image.set(x, y, color)
   }
 
@@ -32,8 +32,11 @@ fn mul_color(a: &image::RGB, b: &image::RGB) -> image::RGB {
   image::RGB { r: a.r * b.r, g: a.g * b.g, b: a.b * b.b }
 }
 
-fn trace_ray<T: Scene>(scene: &T, ray: &Ray) -> image::RGB {
+fn trace_ray<T: Scene>(scene: &T, ray: &Ray, iter: uint) -> image::RGB {
   let candidates = scene.intersection_candidates(ray);
+
+  // boohoo we copy the object here orz
+  let mut best_intersection: Option<(scene::Intersection, scene::Object, lmath::vec::Vec3<float>)> = None;
   for candidates.each |&obj| {
     let origin_objspace = ray.origin.sub_v(&obj.origin());
     let tf_origin_objspace = obj.rotation.mul_v(&origin_objspace);
@@ -41,26 +44,32 @@ fn trace_ray<T: Scene>(scene: &T, ray: &Ray) -> image::RGB {
       origin: tf_origin_objspace,
       direction: obj.rotation.mul_v(&ray.direction.neg()).neg()
     };
-    match obj.intersect_ray(&transformed_ray) {
-      Some(intersection) => {
-        if obj.emits {
-          return obj.color;
-        } else {
-          let mut random_dir = random::random_vector();
-          if random_dir.dot(&intersection.normal) < 0.0 {
-            random_dir.neg_self();
-          }
+    match (best_intersection, obj.intersect_ray(&transformed_ray)) {
+      (_, None) => (),
+      (None, Some(is)) => { best_intersection = Some((is, obj, tf_origin_objspace)); },
+      (Some((prev,_,_)), Some(is)) => { if is.position < prev.position { best_intersection = Some((is, obj, tf_origin_objspace)); } }
+    };
+  };
 
-          let new_ray_origin = tf_origin_objspace.add_v(&ray.direction.mul_t(intersection.position));
-          let tf_new_ray_origin = obj.origin().add_v(&obj.rotation.inverse().mul_v(&new_ray_origin));
-          
-          let new_ray = Ray { origin: tf_new_ray_origin,
-                              direction: obj.rotation.inverse().mul_v(&random_dir) };
-          return mul_color(&obj.color, &trace_ray(scene, &new_ray));
+  match best_intersection {
+    Some((intersection, obj, tf_origin_objspace)) => {
+      if obj.emits {
+        return obj.color;
+      } else {
+        let mut random_dir = random::random_vector();
+        if random_dir.dot(&intersection.normal) < 0.0 {
+          random_dir.neg_self();
         }
-      },
-      None => ()
-    }
+
+        let new_ray_origin = tf_origin_objspace.add_v(&ray.direction.mul_t(intersection.position+0.01));
+        let tf_new_ray_origin = obj.origin().add_v(&obj.rotation.inverse().mul_v(&new_ray_origin));
+
+        let new_ray = Ray { origin: tf_new_ray_origin,
+                            direction: obj.rotation.inverse().mul_v(&random_dir) };
+        return mul_color(&obj.color, &trace_ray(scene, &new_ray, iter+1));
+      }
+    },
+    None => ()
   }
 
   image::RGB { r: 0.0, g: 0.0, b: 0.0 }
@@ -166,20 +175,20 @@ pub impl Object {
 
         let min = min.sub_v(&self.origin());
         let max = max.sub_v(&self.origin());
-        
+
         let t1 = min.sub_v(&ray.origin).mul_v(&ray_dir_inv);
         let t2 = max.sub_v(&ray.origin).mul_v(&ray_dir_inv);
 
         let tmin = [[t1.z, t2.z].min(), [t1.y, t2.y].min(), [t1.x, t2.x].min()].max();
         let tmax = [[t1.z, t2.z].max(), [t1.y, t2.y].max(), [t1.x, t2.x].max()].min();
 
-        if tmax < [0.0, tmin].max() { return None }
+        if tmin < 0.0 || tmax < [0.0, tmin].max() { return None }
 
         let ip = ray.origin.add_v(&ray.direction.mul_t(tmin));
         let c1 = ip.sub_v(&min);
         let c2 = ip.sub_v(&max);
 
-        let EPSILON = 0.0000001;
+        let EPSILON = 0.000000001;
 
         let normal =
           if float::abs(c1.x) < EPSILON { lmath::vec::Vec3 { x: -1.0, y: 0.0, z: 0.0 } }
@@ -189,6 +198,8 @@ pub impl Object {
           else if float::abs(c2.y) < EPSILON { lmath::vec::Vec3 { x: 0.0, y: 1.0, z: 0.0 } }
           else if float::abs(c2.z) < EPSILON { lmath::vec::Vec3 { x: 0.0, y: 0.0, z: 1.0 } }
           else { fail ~"unreachable" };
+
+        // FIXME sometimes rays seem to be able to end up below the world
 
         Some(Intersection { position: tmin, normal: normal })
       }
