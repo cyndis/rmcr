@@ -69,7 +69,13 @@ fn mul_color(a: &image::RGB, b: &image::RGB) -> image::RGB {
 fn trace_ray<T: Scene>(scene: &T, ray: &Ray) -> image::RGB {
   let candidates = scene.intersection_candidates(ray);
   for candidates.each |&obj| {
-    match obj.intersect_ray(ray) {
+    let origin_objspace = ray.origin.sub_v(&obj.origin());
+    let tf_origin_objspace = obj.rotation.mul_v(&origin_objspace);
+    let transformed_ray = Ray {
+      origin: tf_origin_objspace,
+      direction: obj.rotation.mul_v(&ray.direction.neg()).neg()
+    };
+    match obj.intersect_ray(&transformed_ray) {
       Some(intersection) => {
         if obj.emits {
           return obj.color;
@@ -78,8 +84,12 @@ fn trace_ray<T: Scene>(scene: &T, ray: &Ray) -> image::RGB {
           if random_dir.dot(&intersection.normal) < 0.0 {
             random_dir.neg_self();
           }
-          let new_ray = Ray { origin: ray.origin.add_v(&ray.direction.mul_t(intersection.position)),
-                              direction: random_dir };
+
+          let new_ray_origin = tf_origin_objspace.add_v(&ray.direction.mul_t(intersection.position));
+          let tf_new_ray_origin = obj.origin().add_v(&obj.rotation.inverse().mul_v(&new_ray_origin));
+          
+          let new_ray = Ray { origin: tf_new_ray_origin,
+                              direction: obj.rotation.inverse().mul_v(&random_dir) };
           return mul_color(&obj.color, &trace_ray(scene, &new_ray));
         }
       },
@@ -167,10 +177,9 @@ pub impl Object {
   fn intersect_ray(&self, ray: &Ray) -> Option<Intersection> {
     match self.shape {
       Sphere({origin, radius}) => {
-        let relative_origin = ray.origin.sub_v(&origin);
         let a = ray.direction.dot(&ray.direction);
-        let b = 2.0 * ray.direction.dot(&relative_origin);
-        let c = relative_origin.dot(&relative_origin) - radius * radius;
+        let b = 2.0 * ray.direction.dot(&ray.origin);
+        let c = ray.origin.dot(&ray.origin) - radius * radius;
 
         let dcrim = b*b-4.0*a*c;
         if dcrim < 0.0 { return None }
@@ -188,6 +197,10 @@ pub impl Object {
       },
       AABB({min, max}) => {
         let ray_dir_inv = lmath::vec::Vec3 { x: 1.0, y: 1.0, z: 1.0 }.div_v(&ray.direction);
+
+        let min = min.sub_v(&self.origin());
+        let max = max.sub_v(&self.origin());
+        
         let t1 = min.sub_v(&ray.origin).mul_v(&ray_dir_inv);
         let t2 = max.sub_v(&ray.origin).mul_v(&ray_dir_inv);
 
@@ -218,7 +231,7 @@ pub impl Object {
 
   fn origin(&self) -> lmath::vec::Vec3<float> {
     match self.shape {
-      Sphere({origin, radius}) => origin,
+      Sphere({origin, _}) => origin,
       AABB({min, max}) => {
         lmath::vec::Vec3 { x: (min.x+max.x)/2.0, y: (min.y+max.y)/2.0, z: (min.z+max.z)/2.0 }
       }
