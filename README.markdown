@@ -16,6 +16,7 @@ host: x86_64-unknown-linux-gnu
 
 Please do
 <pre>
+$ cargo install lmath
 $ rustc --opt-level=3 main.rs
 $ ./main
 </pre>
