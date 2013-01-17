@@ -8,40 +8,6 @@ pub trait Scene {
   fn intersection_candidates(&self, ray: &Ray) -> ~[Object];
 }
 
-pub fn render<T: Copy Const Owned Scene>(camera: &Camera, scene: &T, w: uint, h: uint) -> image::Image {
-  let mut image = image::Image::new(w, h);
-  let n = w*h;
-  let w = w as float;
-  let h = h as float;
-
-  let camera: Camera = copy *camera;
-  let scene: T = copy *scene;
-
-  let camera_arc = std::arc::ARC(camera);
-  let scene_arc = std::arc::ARC(scene);
-
-  let mut futures = ~[];
-  vec::reserve(&mut futures, n);
-
-  for image.each_coordinate |x, y| {
-    let ca = camera_arc.clone();
-    let sa: std::arc::ARC<T> = scene_arc.clone();
-
-    futures.push(do std::future::spawn |move ca, move sa| {
-      let ray = std::arc::get(&ca).ray(x as float / w, y as float / h);
-      let color = trace_ray(std::arc::get(&sa), &ray);
-      (x, y, color)
-    });
-  }
-
-  for futures.each |&future| {
-    let (x, y, color) = future.get();
-    image.set(x, y, color);
-  }
-
-  image
-}
-
 pub fn render_singlethread<T: Scene>(camera: &Camera, scene: &T, w: uint, h: uint) -> image::Image {
   let mut image = image::Image::new(w, h);
   let w = w as float;
